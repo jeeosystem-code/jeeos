@@ -1,58 +1,40 @@
 name: Build Ascend APK
 on:
-  workflow_dispatch:
   push:
-    branches: [main]
+  workflow_dispatch:
 jobs:
   apk:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Find the project folder
-        id: p
+      - name: Unzip the uploaded kit
         run: |
-          Z=$(find . -maxdepth 2 -name "*.zip" -not -path "./node_modules/*" | head -1)
-          if [ -n "$Z" ] && [ -z "$(find . -name capacitor.config.json -not -path '*/node_modules/*' | head -1)" ]; then
-            mkdir -p /tmp/proj && unzip -q "$Z" -d /tmp/proj && cp -r /tmp/proj ./_proj
-          fi
-          C=$(find . -name capacitor.config.json -not -path '*/node_modules/*' | head -1)
-          if [ -z "$C" ]; then echo "capacitor.config.json not found. Files in the repository:"; find . -maxdepth 3 -not -path './.git/*' | head -50; exit 1; fi
-          D=$(dirname "$C")
-          echo "Project folder: $D"
-          echo "dir=$D" >> "$GITHUB_OUTPUT"
+          Z=$(ls -t *.zip 2>/dev/null | head -n 1 || true)
+          if [ -z "$Z" ]; then echo "No zip found in the repo root"; exit 1; fi
+          echo "Using $Z"
+          rm -rf kit && mkdir kit && unzip -q "$Z" -d kit
+          P=$(find kit -name package.json -not -path "*/node_modules/*" | head -n 1)
+          echo "KIT_DIR=$(dirname "$P")" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
+        with:
+          node-version: 22
       - uses: actions/setup-java@v4
-        with: { distribution: temurin, java-version: 17 }
-      - name: Install packages
-        working-directory: ${{ steps.p.outputs.dir }}
-        run: npm install
-      - name: Prepare web files
-        working-directory: ${{ steps.p.outputs.dir }}
-        run: node scripts/prepare.js
-      - name: Create Android project
-        working-directory: ${{ steps.p.outputs.dir }}
-        run: npx cap add android
-      - name: Add home-screen widgets
-        working-directory: ${{ steps.p.outputs.dir }}
-        run: node scripts/native.js
-      - name: Icons and splash screens
-        working-directory: ${{ steps.p.outputs.dir }}
-        run: npx capacitor-assets generate --android
-      - name: Android settings (vibration, portrait)
-        working-directory: ${{ steps.p.outputs.dir }}
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Install and add Android
+        working-directory: ${{ env.KIT_DIR }}
         run: |
-          M=android/app/src/main/AndroidManifest.xml
-          sed -i 's#<application#<uses-permission android:name="android.permission.VIBRATE" />\n    <application#' $M
-          sed -i 's#<activity#<activity android:screenOrientation="portrait"#' $M
-          grep -n "VIBRATE\|screenOrientation" $M
-      - name: Sync
-        working-directory: ${{ steps.p.outputs.dir }}
-        run: npx cap sync android
-      - name: Build APK
-        working-directory: ${{ steps.p.outputs.dir }}
-        run: cd android && chmod +x gradlew && ./gradlew assembleDebug --no-daemon
+          npm install
+          npx cap add android
+          node scripts/native.js
+          npx cap sync android
+      - name: Build debug APK
+        working-directory: ${{ env.KIT_DIR }}/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: Ascend-APK
-          path: ${{ steps.p.outputs.dir }}/android/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ env.KIT_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
